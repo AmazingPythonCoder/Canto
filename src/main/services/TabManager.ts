@@ -1,6 +1,7 @@
 import { BrowserWindow, WebContentsView, Menu, app, clipboard } from 'electron';
 import * as path from 'path';
 import { SIDEBAR_WIDTH, TITLE_BAR_HEIGHT, TOOLBAR_HEIGHT } from '../../shared/constants';
+import { DatabaseManager } from './DatabaseManager';
 
 export interface Tab {
   id: number;
@@ -11,6 +12,8 @@ export interface Tab {
   groupId: string | null;
   lastActive: number;
   isLoading: boolean;
+  zoomFactor: number;
+  isInternal: boolean;
 }
 
 export interface TabGroup {
@@ -20,16 +23,24 @@ export interface TabGroup {
   isCollapsed: boolean;
 }
 
+interface ClosedTabRecord {
+  url: string;
+  title: string;
+  groupId: string | null;
+}
+
 const GROUP_COLORS = [
-  '#7c65dc',
-  '#1D9E75',
-  '#378ADD',
-  '#EF9F27',
-  '#E24B4A',
-  '#D4537E',
-  '#D85A30',
-  '#888780'
+  '#7c65dc', '#1D9E75', '#378ADD', '#EF9F27',
+  '#E24B4A', '#D4537E', '#D85A30', '#888780'
 ];
+
+const ZOOM_LEVELS = [0.25, 0.33, 0.50, 0.67, 0.75, 0.80, 0.90, 1.0, 1.10, 1.25, 1.50, 1.75, 2.0, 2.50, 3.0, 4.0, 5.0];
+
+const INTERNAL_TITLES: Record<string, string> = {
+  'browser://settings': 'Settings',
+  'browser://bookmarks': 'Bookmarks',
+  'browser://history': 'History',
+};
 
 export class TabManager {
   private tabs: Tab[] = [];
@@ -41,59 +52,42 @@ export class TabManager {
   private nextGroupId = 1;
   private preloadPath: string;
   private newTabUrl: string;
+  private db?: DatabaseManager;
+  private closedTabStack: ClosedTabRecord[] = [];
 
-  constructor(mainWindow: BrowserWindow, preloadPath: string, newTabUrl: string) {
+  constructor(mainWindow: BrowserWindow, preloadPath: string, newTabUrl: string, db?: DatabaseManager) {
     this.mainWindow = mainWindow;
     this.preloadPath = preloadPath;
     this.newTabUrl = newTabUrl;
+    this.db = db;
   }
 
-  public getTabs() {
-    return this.tabs;
-  }
-
-  public getGroups() {
-    return this.groups;
-  }
-
-  public getActiveTabId() {
-    return this.activeTabId;
-  }
+  public getTabs() { return this.tabs; }
+  public getGroups() { return this.groups; }
+  public getActiveTabId() { return this.activeTabId; }
 
   public setTabsAndGroups(tabs: Tab[], groups: TabGroup[]) {
-    // Reconstruct groups
     this.groups = groups || [];
-
-    // Reconstruct tabs and views
     this.closeAllTabs();
 
     let lastActiveId: number | null = null;
     let maxTabId = 0;
-    
+
     for (const savedTab of tabs) {
-      if (savedTab.id > maxTabId) {
-        maxTabId = savedTab.id;
-      }
+      if (savedTab.id > maxTabId) maxTabId = savedTab.id;
       this.createTabInternal(savedTab.id, savedTab.url, savedTab.title, savedTab.groupId);
-      if (savedTab.isActive) {
-        lastActiveId = savedTab.id;
-      }
+      if (savedTab.isActive) lastActiveId = savedTab.id;
     }
-    
-    // Update nextTabId to avoid collisions
+
     this.nextTabId = maxTabId + 1;
-    
-    // Reconstruct nextGroupId to avoid collisions
+
     let maxGroupId = 0;
     for (const group of this.groups) {
-      const numericId = parseInt(group.id.replace('group-', ''), 10);
-      if (!isNaN(numericId) && numericId > maxGroupId) {
-        maxGroupId = numericId;
-      }
+      const n = parseInt(group.id.replace('group-', ''), 10);
+      if (!isNaN(n) && n > maxGroupId) maxGroupId = n;
     }
     this.nextGroupId = maxGroupId + 1;
 
-    // Activate the restored active tab or default to first
     if (lastActiveId !== null && this.viewsMap.has(lastActiveId)) {
       this.activateTab(lastActiveId);
     } else if (this.tabs.length > 0) {
@@ -117,11 +111,14 @@ export class TabManager {
     this.activeTabId = null;
   }
 
+  private isInternalUrl(url: string): boolean {
+    return url.startsWith('browser://');
+  }
+
   public createTab(url?: string, activate = true, groupId: string | null = null): number {
-    url = url ?? this.newTabUrl;
+    const resolvedUrl = url ?? this.newTabUrl;
     const id = this.nextTabId++;
-    this.createTabInternal(id, url, 'New Tab', groupId);
-    
+    this.createTabInternal(id, resolvedUrl, 'New Tab', groupId);
     if (activate) {
       this.activateTab(id);
     } else {
@@ -131,6 +128,8 @@ export class TabManager {
   }
 
   private createTabInternal(id: number, url: string, initialTitle: string, groupId: string | null = null) {
+    const isInternal = this.isInternalUrl(url);
+
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
@@ -141,30 +140,32 @@ export class TabManager {
     });
 
     this.mainWindow.contentView.addChildView(view);
-    
-    // Position it offscreen initially
     view.setBounds({ x: 0, y: -10000, width: 0, height: 0 });
 
     const tabRecord: Tab = {
-      id,
-      url,
-      title: initialTitle,
+      id, url,
+      title: isInternal ? (INTERNAL_TITLES[url] || url.replace('browser://', '')) : initialTitle,
       favicon: '',
       isActive: false,
       groupId,
       lastActive: Date.now(),
-      isLoading: false
+      isLoading: false,
+      zoomFactor: 1.0,
+      isInternal
     };
 
     this.tabs.push(tabRecord);
     this.viewsMap.set(id, view);
 
-    // Load target URL
-    view.webContents.loadURL(url);
+    if (isInternal) {
+      view.webContents.loadURL('about:blank');
+    } else {
+      view.webContents.loadURL(url);
+    }
 
-    // Event listeners
+    // Track loading state
     view.webContents.on('did-start-loading', () => {
-      tabRecord.isLoading = true;
+      if (!tabRecord.isInternal) tabRecord.isLoading = true;
       this.pushState();
     });
 
@@ -172,32 +173,59 @@ export class TabManager {
       tabRecord.isLoading = false;
       tabRecord.url = view.webContents.getURL();
       tabRecord.title = view.webContents.getTitle() || tabRecord.title;
+      this.db?.addHistory(tabRecord.url, tabRecord.title);
       this.pushState();
     };
 
     view.webContents.on('did-stop-loading', onLoadingDone);
-    view.webContents.on('did-navigate', (event, targetUrl) => {
-      tabRecord.url = targetUrl;
-      this.pushState();
-    });
-    view.webContents.on('did-navigate-in-page', (event, targetUrl) => {
-      tabRecord.url = targetUrl;
-      this.pushState();
+    view.webContents.on('did-navigate', (_, targetUrl) => { tabRecord.url = targetUrl; this.pushState(); });
+    view.webContents.on('did-navigate-in-page', (_, targetUrl) => { tabRecord.url = targetUrl; this.pushState(); });
+    view.webContents.on('page-title-updated', (_, title) => { tabRecord.title = title || view.webContents.getTitle(); this.pushState(); });
+    view.webContents.on('page-favicon-updated', (_, favicons) => {
+      if (favicons?.length) { tabRecord.favicon = favicons[0]; this.pushState(); }
     });
 
-    view.webContents.on('page-title-updated', (event, title) => {
-      tabRecord.title = title || view.webContents.getTitle();
-      this.pushState();
-    });
-
-    view.webContents.on('page-favicon-updated', (event, favicons) => {
-      if (favicons && favicons.length > 0) {
-        tabRecord.favicon = favicons[0];
-        this.pushState();
+    view.webContents.on('found-in-page', (_, result) => {
+      if (this.activeTabId === id) {
+        this.mainWindow.webContents.send('find:result', {
+          activeMatchOrdinal: result.activeMatchOrdinal ?? 0,
+          matches: result.matches ?? 0
+        });
       }
     });
 
-    // Handle target="_blank" and new window attempts by opening in a background tab
+    // Intercept keyboard shortcuts before web pages see them
+    view.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const ctrl = input.control || input.meta;
+
+      if (ctrl && !input.shift && input.key.toLowerCase() === 't') { event.preventDefault(); this.createTab(); }
+      else if (ctrl && !input.shift && input.key.toLowerCase() === 'w') { event.preventDefault(); this.closeTab(id); }
+      else if (ctrl && input.shift && input.key.toUpperCase() === 'T') { event.preventDefault(); this.reopenLastClosedTab(); }
+      else if (ctrl && !input.shift && input.key === 'Tab') { event.preventDefault(); this.activateNextTab(); }
+      else if (ctrl && input.shift && input.key === 'Tab') { event.preventDefault(); this.activatePrevTab(); }
+      else if (ctrl && input.key.toLowerCase() === 'l') { event.preventDefault(); this.mainWindow.webContents.send('focus-address-bar'); }
+      else if (ctrl && input.key.toLowerCase() === 'f') { event.preventDefault(); this.mainWindow.webContents.send('find:open'); }
+      else if (ctrl && input.shift && input.key.toUpperCase() === 'R') { event.preventDefault(); this.hardReloadActiveTab(); }
+      else if (ctrl && !input.shift && input.key.toLowerCase() === 'r') { event.preventDefault(); this.activeTabReload(); }
+      else if (ctrl && (input.key === '=' || input.key === '+')) { event.preventDefault(); this.zoomActiveTab('in'); }
+      else if (ctrl && input.key === '-') { event.preventDefault(); this.zoomActiveTab('out'); }
+      else if (ctrl && input.key === '0') { event.preventDefault(); this.zoomActiveTab('reset'); }
+      else if (ctrl && input.key.toLowerCase() === 'd') { event.preventDefault(); this.mainWindow.webContents.send('bookmark-toggle'); }
+      else if (ctrl && input.key === ',') { event.preventDefault(); this.createTab('browser://settings', true); }
+      else if (ctrl && input.shift && input.key.toUpperCase() === 'S') { event.preventDefault(); this.mainWindow.webContents.send('sessions:save-shortcut'); }
+      else if (ctrl && input.shift && input.key.toUpperCase() === 'A') { event.preventDefault(); this.mainWindow.webContents.send('trigger-tab-search'); }
+      else if (input.key === 'F6') { event.preventDefault(); this.mainWindow.webContents.send('focus-address-bar'); }
+      else {
+        const numKey = parseInt(input.key);
+        if (ctrl && !isNaN(numKey) && numKey >= 1 && numKey <= 9) {
+          event.preventDefault();
+          numKey === 9 ? this.activateTabByIndex(-1) : this.activateTabByIndex(numKey - 1);
+        }
+      }
+    });
+
+    // Open links targeting _blank in a new background tab
     view.webContents.setWindowOpenHandler((details) => {
       this.createTab(details.url, false, tabRecord.groupId);
       return { action: 'deny' };
@@ -206,36 +234,32 @@ export class TabManager {
 
   public activateTab(id: number) {
     if (this.activeTabId === id) {
-      const view = this.viewsMap.get(id);
-      if (view) {
-        view.webContents.focus();
-      }
+      this.viewsMap.get(id)?.webContents.focus();
       return;
     }
 
-    // Hide current active view
+    // Hide current
     if (this.activeTabId !== null) {
-      const currentActiveView = this.viewsMap.get(this.activeTabId);
-      if (currentActiveView) {
-        currentActiveView.setBounds({ x: 0, y: -10000, width: 0, height: 0 });
-      }
-      const activeTabRecord = this.tabs.find(t => t.id === this.activeTabId);
-      if (activeTabRecord) {
-        activeTabRecord.isActive = false;
-      }
+      this.viewsMap.get(this.activeTabId)?.setBounds({ x: 0, y: -10000, width: 0, height: 0 });
+      const prev = this.tabs.find(t => t.id === this.activeTabId);
+      if (prev) prev.isActive = false;
     }
 
-    const newActiveView = this.viewsMap.get(id);
-    const newActiveRecord = this.tabs.find(t => t.id === id);
+    const view = this.viewsMap.get(id);
+    const record = this.tabs.find(t => t.id === id);
 
-    if (newActiveView && newActiveRecord) {
+    if (view && record) {
       this.activeTabId = id;
-      newActiveRecord.isActive = true;
-      newActiveRecord.lastActive = Date.now();
-      
-      // Update bounds to display in active region
-      this.updateBounds();
-      newActiveView.webContents.focus();
+      record.isActive = true;
+      record.lastActive = Date.now();
+
+      if (!record.isInternal) {
+        this.updateBounds();
+        view.webContents.setZoomFactor(record.zoomFactor);
+        view.webContents.focus();
+      }
+
+      this.mainWindow.webContents.send('find:close');
     }
 
     this.pushState();
@@ -246,33 +270,35 @@ export class TabManager {
     if (tabIndex === -1) return;
 
     const closedTab = this.tabs[tabIndex];
-    const view = this.viewsMap.get(id);
 
+    // Push to reopen stack (skip blank/newtab pages)
+    if (closedTab.url && !closedTab.url.includes('new-tab.html') && closedTab.url !== 'about:blank') {
+      this.closedTabStack.push({ url: closedTab.url, title: closedTab.title, groupId: closedTab.groupId });
+      if (this.closedTabStack.length > 20) this.closedTabStack.shift();
+    }
+
+    const view = this.viewsMap.get(id);
     if (view) {
       try {
         this.mainWindow.contentView.removeChildView(view);
         (view.webContents as any).destroy();
       } catch (err) {
-        console.error(`Error deleting view associated with tab ${id}:`, err);
+        console.error(`Error destroying view ${id}:`, err);
       }
       this.viewsMap.delete(id);
     }
 
     this.tabs.splice(tabIndex, 1);
 
-    // Clean up empty group if closed tab belonged to one
     if (closedTab.groupId) {
-      const groupTabs = this.tabs.filter(t => t.groupId === closedTab.groupId);
-      if (groupTabs.length === 0) {
+      if (!this.tabs.some(t => t.groupId === closedTab.groupId)) {
         this.groups = this.groups.filter(g => g.id !== closedTab.groupId);
       }
     }
 
-    // Handle activating another tab if active closed
     if (this.activeTabId === id) {
       if (this.tabs.length > 0) {
-        const nextIndex = Math.min(tabIndex, this.tabs.length - 1);
-        this.activateTab(this.tabs[nextIndex].id);
+        this.activateTab(this.tabs[Math.min(tabIndex, this.tabs.length - 1)].id);
       } else {
         this.activeTabId = null;
         this.createTab();
@@ -282,74 +308,132 @@ export class TabManager {
     }
   }
 
-  public navigateActiveTab(input: string) {
+  public reopenLastClosedTab() {
+    const record = this.closedTabStack.pop();
+    if (record) this.createTab(record.url, true, record.groupId);
+  }
+
+  public activateTabByIndex(index: number) {
+    if (this.tabs.length === 0) return;
+    const i = index < 0 ? this.tabs.length - 1 : Math.min(index, this.tabs.length - 1);
+    this.activateTab(this.tabs[i].id);
+  }
+
+  public navigateActiveTab(url: string) {
     if (this.activeTabId === null) return;
+    const record = this.tabs.find(t => t.id === this.activeTabId);
     const view = this.viewsMap.get(this.activeTabId);
-    if (view) {
-      view.webContents.loadURL(input);
+    if (!record || !view) return;
+
+    if (this.isInternalUrl(url)) {
+      record.url = url;
+      record.isInternal = true;
+      record.title = INTERNAL_TITLES[url] || url.replace('browser://', '');
+      record.isLoading = false;
+      view.setBounds({ x: 0, y: -10000, width: 0, height: 0 });
+      this.pushState();
+      return;
     }
+
+    if (record.isInternal) {
+      record.isInternal = false;
+      this.updateBounds();
+    }
+
+    view.webContents.loadURL(url);
   }
 
   public activeTabBack() {
     if (this.activeTabId === null) return;
     const view = this.viewsMap.get(this.activeTabId);
-    if (view && view.webContents.canGoBack()) {
-      view.webContents.goBack();
-    }
+    if (view?.webContents.canGoBack()) view.webContents.goBack();
   }
 
   public activeTabForward() {
     if (this.activeTabId === null) return;
     const view = this.viewsMap.get(this.activeTabId);
-    if (view && view.webContents.canGoForward()) {
-      view.webContents.goForward();
-    }
+    if (view?.webContents.canGoForward()) view.webContents.goForward();
   }
 
   public activeTabReload() {
     if (this.activeTabId === null) return;
+    this.viewsMap.get(this.activeTabId)?.webContents.reload();
+  }
+
+  public hardReloadActiveTab() {
+    if (this.activeTabId === null) return;
+    this.viewsMap.get(this.activeTabId)?.webContents.reloadIgnoringCache();
+  }
+
+  public zoomActiveTab(direction: 'in' | 'out' | 'reset') {
+    if (this.activeTabId === null) return;
+    const record = this.tabs.find(t => t.id === this.activeTabId);
     const view = this.viewsMap.get(this.activeTabId);
-    if (view) {
-      view.webContents.reload();
+    if (!record || !view || record.isInternal) return;
+
+    let factor = record.zoomFactor;
+    if (direction === 'reset') {
+      factor = 1.0;
+    } else if (direction === 'in') {
+      const next = ZOOM_LEVELS.find(z => z > factor + 0.001);
+      if (next !== undefined) factor = next;
+    } else {
+      const prev = [...ZOOM_LEVELS].reverse().find(z => z < factor - 0.001);
+      if (prev !== undefined) factor = prev;
     }
+
+    record.zoomFactor = factor;
+    view.webContents.setZoomFactor(factor);
+    this.pushState();
+  }
+
+  public findInPage(query: string, forward = true) {
+    if (this.activeTabId === null) return;
+    const view = this.viewsMap.get(this.activeTabId);
+    if (!view || this.tabs.find(t => t.id === this.activeTabId)?.isInternal) return;
+    if (!query.trim()) {
+      view.webContents.stopFindInPage('clearSelection');
+      return;
+    }
+    view.webContents.findInPage(query, { forward, matchCase: false });
+  }
+
+  public stopFindInPage() {
+    if (this.activeTabId === null) return;
+    this.viewsMap.get(this.activeTabId)?.webContents.stopFindInPage('clearSelection');
   }
 
   public updateBounds() {
     if (this.activeTabId === null) return;
+    const record = this.tabs.find(t => t.id === this.activeTabId);
     const view = this.viewsMap.get(this.activeTabId);
-    if (view) {
-      const [width, height] = this.mainWindow.getContentSize();
-      const chromeHeight = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT;
-      view.setBounds({
-        x: SIDEBAR_WIDTH,
-        y: chromeHeight,
-        width: Math.max(0, width - SIDEBAR_WIDTH),
-        height: Math.max(0, height - chromeHeight),
-      });
+    if (!view || !record) return;
+
+    if (record.isInternal) {
+      view.setBounds({ x: 0, y: -10000, width: 0, height: 0 });
+      return;
     }
+
+    const [width, height] = this.mainWindow.getContentSize();
+    const chromeHeight = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT;
+    view.setBounds({
+      x: SIDEBAR_WIDTH,
+      y: chromeHeight,
+      width: Math.max(0, width - SIDEBAR_WIDTH),
+      height: Math.max(0, height - chromeHeight),
+    });
   }
+
+  // ── Group management ──────────────────────────────────────────
 
   public groupTabs(tabIds: number[], groupName?: string): string {
     const groupId = `group-${this.nextGroupId++}`;
     const color = GROUP_COLORS[(this.nextGroupId - 2) % GROUP_COLORS.length];
-    const name = groupName || `Group ${this.nextGroupId - 1}`;
-
-    const newGroup: TabGroup = {
-      id: groupId,
-      name,
-      color,
-      isCollapsed: false
-    };
-
-    this.groups.push(newGroup);
-
+    this.groups.push({ id: groupId, name: groupName || `Group ${this.nextGroupId - 1}`, color, isCollapsed: false });
     for (const tabId of tabIds) {
       const tab = this.tabs.find(t => t.id === tabId);
-      if (tab) {
-        tab.groupId = groupId;
-      }
+      if (tab) tab.groupId = groupId;
     }
-
     this.pushState();
     return groupId;
   }
@@ -357,43 +441,27 @@ export class TabManager {
   public ungroupTab(tabId: number) {
     const tab = this.tabs.find(t => t.id === tabId);
     if (!tab) return;
-
-    const oldGroupId = tab.groupId;
+    const old = tab.groupId;
     tab.groupId = null;
-
-    // Clean up empty groups
-    if (oldGroupId) {
-      const groupTabs = this.tabs.filter(t => t.groupId === oldGroupId);
-      if (groupTabs.length === 0) {
-        this.groups = this.groups.filter(g => g.id !== oldGroupId);
-      }
+    if (old && !this.tabs.some(t => t.groupId === old)) {
+      this.groups = this.groups.filter(g => g.id !== old);
     }
-
     this.pushState();
   }
 
   public toggleGroupCollapse(groupId: string) {
-    const group = this.groups.find(g => g.id === groupId);
-    if (group) {
-      group.isCollapsed = !group.isCollapsed;
-      this.pushState();
-    }
+    const g = this.groups.find(g => g.id === groupId);
+    if (g) { g.isCollapsed = !g.isCollapsed; this.pushState(); }
   }
 
   public setGroupColor(groupId: string, color: string) {
-    const group = this.groups.find(g => g.id === groupId);
-    if (group) {
-      group.color = color;
-      this.pushState();
-    }
+    const g = this.groups.find(g => g.id === groupId);
+    if (g) { g.color = color; this.pushState(); }
   }
 
   public setGroupName(groupId: string, name: string) {
-    const group = this.groups.find(g => g.id === groupId);
-    if (group) {
-      group.name = name;
-      this.pushState();
-    }
+    const g = this.groups.find(g => g.id === groupId);
+    if (g) { g.name = name; this.pushState(); }
   }
 
   public showTabContextMenu(id: number) {
@@ -401,142 +469,73 @@ export class TabManager {
     if (!tab) return;
 
     const template: any[] = [
-      {
-        label: 'Close Tab',
-        click: () => this.closeTab(id)
-      },
-      {
-        label: 'Close Other Tabs',
-        click: () => {
-          const idsToClose = this.tabs.map(t => t.id).filter(tabId => tabId !== id);
-          for (const closeId of idsToClose) {
-            this.closeTab(closeId);
-          }
-        }
-      },
+      { label: 'Close Tab', click: () => this.closeTab(id) },
+      { label: 'Close Other Tabs', click: () => {
+        this.tabs.map(t => t.id).filter(tid => tid !== id).forEach(tid => this.closeTab(tid));
+      }},
       { type: 'separator' }
     ];
 
-    const groupingSubmenu = [];
     if (tab.groupId) {
-      template.push({
-        label: 'Remove from Group',
-        click: () => this.ungroupTab(id)
-      });
+      template.push({ label: 'Remove from Group', click: () => this.ungroupTab(id) });
     }
 
-    const otherGroups = this.groups.filter(g => g.id !== tab.groupId);
-    if (otherGroups.length > 0) {
-      groupingSubmenu.push(
-        ...otherGroups.map(g => ({
-          label: `Move to "${g.name}"`,
-          click: () => {
-            const oldGroupId = tab.groupId;
-            tab.groupId = g.id;
-            
-            if (oldGroupId) {
-              const groupTabs = this.tabs.filter(t => t.groupId === oldGroupId);
-              if (groupTabs.length === 0) {
-                this.groups = this.groups.filter(groupItem => groupItem.id !== oldGroupId);
-              }
-            }
-            this.pushState();
-          }
-        }))
-      );
-    }
+    const groupingSubmenu: any[] = this.groups
+      .filter(g => g.id !== tab.groupId)
+      .map(g => ({ label: `Move to "${g.name}"`, click: () => {
+        const old = tab.groupId;
+        tab.groupId = g.id;
+        if (old && !this.tabs.some(t => t.groupId === old)) this.groups = this.groups.filter(gr => gr.id !== old);
+        this.pushState();
+      }}));
 
-    groupingSubmenu.push({
-      label: 'Add to New Group',
-      click: () => this.groupTabs([id])
-    });
-
-    template.push({
-      label: 'Group Tab',
-      submenu: groupingSubmenu
-    });
-
-    template.push({ type: 'separator' });
-
-    template.push(
-      {
-        label: 'Duplicate Tab',
-        click: () => this.createTab(tab.url, true, tab.groupId)
-      },
-      {
-        label: 'Copy URL',
-        click: () => clipboard.writeText(tab.url)
-      }
+    groupingSubmenu.push({ label: 'Add to New Group', click: () => this.groupTabs([id]) });
+    template.push({ label: 'Group Tab', submenu: groupingSubmenu }, { type: 'separator' },
+      { label: 'Duplicate Tab', click: () => this.createTab(tab.url, true, tab.groupId) },
+      { label: 'Copy URL', click: () => clipboard.writeText(tab.url) }
     );
 
-    const menu = Menu.buildFromTemplate(template);
-    menu.popup({ window: this.mainWindow });
+    Menu.buildFromTemplate(template).popup({ window: this.mainWindow });
   }
 
   public showGroupContextMenu(groupId: string) {
     const group = this.groups.find(g => g.id === groupId);
     if (!group) return;
-
-    const template = [
-      {
-        label: 'Ungroup All Tabs',
-        click: () => {
-          const tabsInGroup = this.tabs.filter(t => t.groupId === groupId);
-          for (const t of tabsInGroup) {
-            t.groupId = null;
-          }
-          this.groups = this.groups.filter(g => g.id !== groupId);
-          this.pushState();
-        }
-      },
-      {
-        label: 'Close Group',
-        click: () => {
-          const tabsInGroup = this.tabs.filter(t => t.groupId === groupId);
-          for (const t of tabsInGroup) {
-            this.closeTab(t.id);
-          }
-        }
-      },
+    const template: any[] = [
+      { label: 'Ungroup All Tabs', click: () => {
+        this.tabs.filter(t => t.groupId === groupId).forEach(t => { t.groupId = null; });
+        this.groups = this.groups.filter(g => g.id !== groupId);
+        this.pushState();
+      }},
+      { label: 'Close Group', click: () => {
+        [...this.tabs.filter(t => t.groupId === groupId)].forEach(t => this.closeTab(t.id));
+      }},
       { type: 'separator' },
-      {
-        label: 'Change Group Color',
-        submenu: GROUP_COLORS.map((color, index) => ({
-          label: `Color ${index + 1}`,
-          click: () => this.setGroupColor(groupId, color)
-        }))
-      }
+      { label: 'Change Group Color', submenu: GROUP_COLORS.map((color, i) => ({
+        label: `Color ${i + 1}`, click: () => this.setGroupColor(groupId, color)
+      }))}
     ];
-
-    const menu = Menu.buildFromTemplate(template as any);
-    menu.popup({ window: this.mainWindow });
+    Menu.buildFromTemplate(template).popup({ window: this.mainWindow });
   }
 
   public activateNextTab() {
     if (this.tabs.length <= 1 || this.activeTabId === null) return;
-    const activeIndex = this.tabs.findIndex(t => t.id === this.activeTabId);
-    const nextIndex = (activeIndex + 1) % this.tabs.length;
-    this.activateTab(this.tabs[nextIndex].id);
+    const i = this.tabs.findIndex(t => t.id === this.activeTabId);
+    this.activateTab(this.tabs[(i + 1) % this.tabs.length].id);
   }
 
   public activatePrevTab() {
     if (this.tabs.length <= 1 || this.activeTabId === null) return;
-    const activeIndex = this.tabs.findIndex(t => t.id === this.activeTabId);
-    const prevIndex = (activeIndex - 1 + this.tabs.length) % this.tabs.length;
-    this.activateTab(this.tabs[prevIndex].id);
+    const i = this.tabs.findIndex(t => t.id === this.activeTabId);
+    this.activateTab(this.tabs[(i - 1 + this.tabs.length) % this.tabs.length].id);
   }
 
   public pushState() {
     this.mainWindow.webContents.send('tab-state-update', {
       tabs: this.tabs.map(t => ({
-        id: t.id,
-        url: t.url,
-        title: t.title,
-        favicon: t.favicon,
-        isActive: t.isActive,
-        groupId: t.groupId,
-        lastActive: t.lastActive,
-        isLoading: t.isLoading
+        id: t.id, url: t.url, title: t.title, favicon: t.favicon,
+        isActive: t.isActive, groupId: t.groupId, lastActive: t.lastActive,
+        isLoading: t.isLoading, zoomFactor: t.zoomFactor, isInternal: t.isInternal
       })),
       groups: this.groups,
       activeTabId: this.activeTabId
