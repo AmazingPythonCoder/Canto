@@ -186,11 +186,12 @@ button { -webkit-app-region: no-drag; }
   height: 100%;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
-  display: grid;
-  grid-template-rows: 40px 1fr var(--sidebar-footer-height);
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-header {
+  flex: 0 0 40px;
   height: 40px;
   padding: 0 var(--space-2) 0 var(--space-4);
   display: flex;
@@ -265,6 +266,7 @@ button { -webkit-app-region: no-drag; }
 
 /* ─── Tab list ───────────────────────────────────────────────── */
 .sidebar-tabs-list {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -482,9 +484,107 @@ button { -webkit-app-region: no-drag; }
   gap: 2px;
 }
 
+/* ─── Sessions Panel ─────────────────────────────────────────── */
+.sessions-panel {
+  flex: 0 0 auto;
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar-deep);
+  scrollbar-gutter: stable;
+}
+
+.sessions-panel::-webkit-scrollbar { width: 3px; }
+.sessions-panel::-webkit-scrollbar-track { background: transparent; }
+.sessions-panel::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+
+.sessions-panel-heading {
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2) 5px var(--space-3);
+  border-radius: var(--radius-sm);
+  margin: 1px var(--space-2);
+  cursor: default;
+  transition: background 80ms var(--motion-curve);
+}
+
+.session-item:hover { background: var(--bg-hover); }
+
+.session-item-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-item-name {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-meta {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.session-item-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 80ms var(--motion-curve);
+}
+
+.session-item:hover .session-item-actions { opacity: 1; }
+
+.session-action-btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 80ms, border-color 80ms, color 80ms;
+}
+
+.session-action-btn .mdl-icon { font-size: 10px; }
+
+.session-action-btn:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.session-action-btn.delete:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
 /* ─── Sidebar Footer ─────────────────────────────────────────── */
 .sidebar-footer {
-  height: var(--sidebar-footer-height);
+  flex: 0 0 48px;
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-sidebar-deep);
   display: flex;
@@ -494,12 +594,48 @@ button { -webkit-app-region: no-drag; }
   gap: var(--space-2);
 }
 
-.memory-readout {
-  color: var(--text-faint);
+.sessions-toggle-btn {
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  font-family: var(--font-mono);
+  transition: background 80ms, border-color 80ms, color 80ms;
+}
+
+.sessions-toggle-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+}
+
+.sessions-toggle-btn.active {
+  color: var(--accent-warm);
+  border-color: var(--accent-warm-border);
+  background: var(--accent-warm-subtle);
+}
+
+.sessions-count {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 16px;
+}
+
+.sessions-toggle-btn.active .sessions-count {
+  background: var(--accent-warm-subtle);
+  border-color: var(--accent-warm-border);
+  color: var(--accent-warm);
 }
 
 .save-session-text-btn {

@@ -1,6 +1,29 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+﻿import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Tab, TabGroup, SessionMetadata, OmniboxSuggestion, FindResult } from './types';
 import Settings from './Settings';
+
+const ICONS = {
+  winMinimize:   '', // ChromeMinimize
+  winMaximize:   '', // ChromeMaximize
+  winClose:      '', // Cancel
+  back:          '', // Back
+  forward:       '', // Forward
+  refresh:       '', // Sync/Refresh
+  stop:          '', // Cancel (loading)
+  newTab:        '', // Add
+  tabClose:      '', // Cancel
+  chevronDown:   '', // ChevronDown
+  chevronRight:  '', // ChevronRight
+  lock:          '', // Lock
+  warning:       '', // StatusWarning
+  globe:         '', // Globe
+  bookmarkEmpty: '', // FavoriteStar
+  bookmarkFill:  '', // FavoriteStarFill
+  history:       '', // History
+  search:        '', // Search
+  tag:           '', // Tag
+  restore:       '', // RepairList
+} as const;
 
 function Icon({ glyph, className = '' }: { glyph: string; className?: string }) {
   return <span aria-hidden="true" className={`mdl-icon ${className}`}>{glyph}</span>;
@@ -54,6 +77,7 @@ export default function App() {
   // ── Sessions & crash ─────────────────────────────────────────
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
   const [showCrashPrompt, setShowCrashPrompt] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
 
   // ── Group renaming ────────────────────────────────────────────
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -279,6 +303,16 @@ export default function App() {
     window.browserAPI.saveSession(`Session ${ts}`);
   };
 
+  const formatDate = (ms: number) => {
+    const d = new Date(ms);
+    const now = new Date();
+    const diff = now.getTime() - ms;
+    if (diff < 60_000) return 'just now';
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
   // ── Render helpers ────────────────────────────────────────────
   const getTabGroup = (tab: Tab) => groups.find(g => g.id === tab.groupId);
 
@@ -288,7 +322,7 @@ export default function App() {
       <img src={tab.favicon} className="tab-favicon"
         onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} alt="" />
     );
-    return <Icon glyph="" className="tab-favicon-fallback" />;
+    return <Icon glyph={ICONS.globe} className="tab-favicon-fallback" />;
   };
 
   const renderTabItem = (tab: Tab, nested = false) => {
@@ -306,7 +340,7 @@ export default function App() {
         <span className="tab-title">{tab.title || 'New Tab'}</span>
         <button className="tab-close-btn" aria-label={`Close ${tab.title}`}
           onClick={e => { e.stopPropagation(); window.browserAPI.closeTab(tab.id); }}>
-          <Icon glyph="" />
+          <Icon glyph={ICONS.tabClose} />
         </button>
       </div>
     );
@@ -345,7 +379,7 @@ export default function App() {
                 </div>
               )}
               <span className="group-collapse-icon">
-                <Icon glyph={group.isCollapsed ? '' : ''} />
+                <Icon glyph={group.isCollapsed ? ICONS.chevronRight : ICONS.chevronDown} />
               </span>
             </div>
             {!group.isCollapsed && (
@@ -359,7 +393,7 @@ export default function App() {
 
   // Security icon
   const securityClass = activeUrl.startsWith('https://') ? 'secure' : activeUrl.startsWith('http://') ? 'warning' : 'internal';
-  const securityGlyph = activeUrl.startsWith('https://') ? '' : activeUrl.startsWith('http://') ? '' : '';
+  const securityGlyph = activeUrl.startsWith('https://') ? ICONS.lock : activeUrl.startsWith('http://') ? ICONS.warning : ICONS.globe;
 
   // Zoom display
   const zoomPct = Math.round(activeZoom * 100);
@@ -373,9 +407,9 @@ export default function App() {
       {/* Title bar */}
       <header className="title-bar draggable">
         <div className="window-controls nodrag">
-          <button onClick={() => window.browserAPI.minimize()} aria-label="Minimize" className="win-btn minimize"><Icon glyph="" /></button>
-          <button onClick={() => window.browserAPI.maximize()} aria-label="Maximize" className="win-btn maximize"><Icon glyph="" /></button>
-          <button onClick={() => window.browserAPI.close()} aria-label="Close" className="win-btn close"><Icon glyph="" /></button>
+          <button onClick={() => window.browserAPI.minimize()} aria-label="Minimize" className="win-btn minimize"><Icon glyph={ICONS.winMinimize} /></button>
+          <button onClick={() => window.browserAPI.maximize()} aria-label="Maximize" className="win-btn maximize"><Icon glyph={ICONS.winMaximize} /></button>
+          <button onClick={() => window.browserAPI.close()} aria-label="Close" className="win-btn close"><Icon glyph={ICONS.winClose} /></button>
         </div>
       </header>
 
@@ -386,15 +420,56 @@ export default function App() {
             <span className="sidebar-section-label">Tabs</span>
             <button onClick={() => window.browserAPI.createTab()} className="sidebar-newtab-btn nodrag"
               aria-label="New tab" title="New tab (Ctrl+T)">
-              <Icon glyph="" />
+              <Icon glyph={ICONS.newTab} />
             </button>
           </div>
           <div className="sidebar-tabs-list">{sidebarItems}</div>
+
+          {/* Sessions panel — shown when toggled open */}
+          {showSessions && (
+            <div className="sessions-panel">
+              {sessions.length === 0 ? (
+                <p className="sessions-panel-heading" style={{ padding: '10px 12px', fontStyle: 'italic', textTransform: 'none', letterSpacing: 0 }}>
+                  No saved sessions yet
+                </p>
+              ) : (
+                <>
+                  <p className="sessions-panel-heading">Saved sessions</p>
+                  {sessions.map(s => (
+                    <div key={s.name} className="session-item">
+                      <div className="session-item-info">
+                        <span className="session-item-name">{s.name}</span>
+                        <span className="session-item-meta">{s.tabCount} tab{s.tabCount !== 1 ? 's' : ''} · {formatDate(s.saveDate)}</span>
+                      </div>
+                      <div className="session-item-actions">
+                        <button className="session-action-btn" title="Load session"
+                          onClick={() => { window.browserAPI.loadSession(s.name); setShowSessions(false); }}>
+                          <Icon glyph={ICONS.restore} />
+                        </button>
+                        <button className="session-action-btn delete" title="Delete session"
+                          onClick={() => window.browserAPI.deleteSession(s.name)}>
+                          <Icon glyph={ICONS.winClose} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
           <div className="sidebar-footer">
-            <span className="memory-readout">↓ 312 MB</span>
+            <button
+              className={`sessions-toggle-btn${showSessions ? ' active' : ''}`}
+              onClick={() => setShowSessions(p => !p)}
+              title="Toggle saved sessions"
+            >
+              Sessions
+              {sessions.length > 0 && <span className="sessions-count">{sessions.length}</span>}
+            </button>
             <button onClick={handleSaveSession} className="save-session-text-btn"
-              title={sessions.length ? `${sessions.length} saved sessions` : 'Save session (Ctrl+Shift+S)'}>
-              Save session
+              title="Save session (Ctrl+Shift+S)">
+              Save
             </button>
           </div>
         </aside>
@@ -405,12 +480,12 @@ export default function App() {
           {showCrashPrompt && (
             <div className="crash-prompt-banner">
               <div className="crash-prompt-message">
-                <Icon glyph="" className="crash-alert-icon" />
+                <Icon glyph={ICONS.warning} className="crash-alert-icon" />
                 <span>Canto didn't close cleanly. Restore your last session?</span>
               </div>
               <div className="crash-prompt-actions">
                 <button onClick={() => { window.browserAPI.restoreAutoSession(); setShowCrashPrompt(false); }} className="crash-btn restore">
-                  <Icon glyph="" /><span>Restore</span>
+                  <Icon glyph={ICONS.restore} /><span>Restore</span>
                 </button>
                 <button onClick={() => { window.browserAPI.dismissCrash(); setShowCrashPrompt(false); }} className="crash-btn dismiss">
                   Dismiss
@@ -422,10 +497,10 @@ export default function App() {
           {/* Toolbar */}
           <header className="toolbar draggable">
             <div className="nav-controls nodrag">
-              <button onClick={() => window.browserAPI.back()} aria-label="Back" className="control-btn"><Icon glyph="" /></button>
-              <button onClick={() => window.browserAPI.forward()} aria-label="Forward" className="control-btn"><Icon glyph="" /></button>
+              <button onClick={() => window.browserAPI.back()} aria-label="Back" className="control-btn"><Icon glyph={ICONS.back} /></button>
+              <button onClick={() => window.browserAPI.forward()} aria-label="Forward" className="control-btn"><Icon glyph={ICONS.forward} /></button>
               <button onClick={() => window.browserAPI.reload()} aria-label={activeIsLoading ? 'Stop' : 'Reload'} className="control-btn">
-                <Icon glyph={activeIsLoading ? '' : ''} />
+                <Icon glyph={activeIsLoading ? ICONS.stop : ICONS.refresh} />
               </button>
             </div>
 
@@ -462,7 +537,7 @@ export default function App() {
                 title="Bookmark (Ctrl+D)"
                 onClick={() => window.browserAPI.toggleBookmark({ url: activeUrl, title: activeTitle, favicon: activeFavicon })}
               >
-                <Icon glyph={isBookmarked ? '' : ''} />
+                <Icon glyph={isBookmarked ? ICONS.bookmarkFill : ICONS.bookmarkEmpty} />
               </button>
 
               {/* Omnibox dropdown */}
@@ -476,7 +551,7 @@ export default function App() {
                       onMouseEnter={() => setSelectedIdx(i)}
                     >
                       <span className="omnibox-item-icon">
-                        <Icon glyph={s.type === 'bookmark' ? '' : ''} />
+                        <Icon glyph={s.type === 'bookmark' ? ICONS.bookmarkEmpty : ICONS.history} />
                       </span>
                       <span className="omnibox-item-body">
                         <span className="omnibox-item-title">{s.title || s.url}</span>
@@ -491,7 +566,7 @@ export default function App() {
             <div className="toolbar-actions nodrag">
               <button onClick={() => setShowSearch(true)} className="control-btn"
                 aria-label="Search tabs" title="Search tabs (Ctrl+Shift+A)">
-                <Icon glyph="" />
+                <Icon glyph={ICONS.search} />
               </button>
             </div>
           </header>
@@ -506,7 +581,7 @@ export default function App() {
           {/* Find bar */}
           {showFind && (
             <div className="find-bar">
-              <Icon glyph="" className="find-bar-icon" />
+              <Icon glyph={ICONS.search} className="find-bar-icon" />
               <input
                 ref={findInputRef}
                 type="text"
@@ -529,15 +604,15 @@ export default function App() {
               )}
               <button className="find-bar-btn" aria-label="Previous" title="Previous (Shift+Enter)"
                 onClick={() => window.browserAPI.findStart(findQuery, false)}>
-                <Icon glyph="" />
+                <Icon glyph={ICONS.chevronUp} />
               </button>
               <button className="find-bar-btn" aria-label="Next" title="Next (Enter)"
                 onClick={() => window.browserAPI.findStart(findQuery, true)}>
-                <Icon glyph="" />
+                <Icon glyph={ICONS.chevronDown} />
               </button>
               <button className="find-bar-btn find-bar-close" aria-label="Close find bar"
                 onClick={closeFindBar}>
-                <Icon glyph="" />
+                <Icon glyph={ICONS.winClose} />
               </button>
             </div>
           )}
@@ -549,12 +624,12 @@ export default function App() {
         <div className="search-overlay" onClick={() => setShowSearch(false)}>
           <div className="search-modal" onClick={e => e.stopPropagation()}>
             <div className="search-modal-header">
-              <Icon glyph="" className="search-modal-icon" />
+              <Icon glyph={ICONS.search} className="search-modal-icon" />
               <input ref={searchInputRef} type="text" placeholder="Search tabs by title or URL…"
                 value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                 className="search-modal-input" />
               <button onClick={() => setShowSearch(false)} className="search-modal-close" aria-label="Close search">
-                <Icon glyph="" />
+                <Icon glyph={ICONS.winClose} />
               </button>
             </div>
             <div className="search-modal-results">
@@ -562,7 +637,7 @@ export default function App() {
                 <div key={`sr-${tab.id}`}
                   onClick={() => { window.browserAPI.activateTab(tab.id); setShowSearch(false); }}
                   className="search-result-item">
-                  <Icon glyph="" className="result-icon" />
+                  <Icon glyph={ICONS.tag} className="result-icon" />
                   <div className="result-details">
                     <span className="result-title">{tab.title}</span>
                     <span className="result-url">{tab.url}</span>
