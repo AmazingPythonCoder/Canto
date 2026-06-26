@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:5173 http://localhost:5173; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com;" />
+  <title>Canto</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    if (!window.browserAPI) {
+      const sampleTabs = [
+        { id: 1, title: 'Canto Preview', url: 'https://example.com', isActive: true, isLoading: false },
+        { id: 2, title: 'Design System Notes', url: 'https://canto.local/notes', isActive: false, isLoading: false, groupId: 'work' },
+        { id: 3, title: 'Release Checklist', url: 'https://canto.local/release', isActive: false, isLoading: true, groupId: 'work' }
+      ];
+      const sampleGroups = [{ id: 'work', name: 'Workspace', color: '#8b98a8', isCollapsed: false }];
+      const noop = () => {};
+      window.browserAPI = {
+        navigate: noop,
+        back: noop,
+        forward: noop,
+        reload: noop,
+        minimize: noop,
+        maximize: noop,
+        close: noop,
+        createTab: noop,
+        activateTab: noop,
+        closeTab: noop,
+        showTabContextMenu: noop,
+        showGroupContextMenu: noop,
+        toggleGroupCollapse: noop,
+        setGroupName: noop,
+        saveSession: noop,
+        loadSession: noop,
+        deleteSession: noop,
+        restoreAutoSession: noop,
+        dismissCrash: noop,
+        listSessions: async () => [{ name: 'Research', tabCount: 4 }, { name: 'Ops', tabCount: 3 }],
+        requestInitialTabState: noop,
+        onNavigationUpdate: () => noop,
+        onTabStateUpdate: (callback) => {
+          queueMicrotask(() => callback(null, { tabs: sampleTabs, groups: sampleGroups, activeTabId: 1 }));
+          return noop;
+        },
+        onShowCrashPrompt: () => noop,
+        onSessionsUpdated: () => noop,
+        onTriggerTabSearch: () => noop
+      };
+    }
+  </script>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>
