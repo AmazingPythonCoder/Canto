@@ -8,6 +8,9 @@ let tabManager: TabManager | null = null;
 let sessionManager: SessionManager | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const NEW_TAB_URL = isDev
+  ? 'http://localhost:5173/new-tab.html'
+  : `file://${path.join(__dirname, '../renderer/new-tab.html')}`;
 
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
@@ -62,7 +65,7 @@ function createWindow() {
   });
 
   const preloadPath = path.join(__dirname, '../preload/preload.js');
-  tabManager = new TabManager(mainWindow, preloadPath);
+  tabManager = new TabManager(mainWindow, preloadPath, NEW_TAB_URL);
 
   // Load React shell
   if (isDev) {
@@ -288,7 +291,7 @@ ipcMain.on('sessions:dismiss-crash', () => {
 ipcMain.on('tabs:request-initial-state', () => {
   if (tabManager) {
     if (tabManager.getTabs().length === 0) {
-      tabManager.createTab('https://example.com', true);
+      tabManager.createTab(NEW_TAB_URL, true);
     } else {
       tabManager.pushState();
     }

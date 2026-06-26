@@ -40,10 +40,12 @@ export class TabManager {
   private nextTabId = 1;
   private nextGroupId = 1;
   private preloadPath: string;
+  private newTabUrl: string;
 
-  constructor(mainWindow: BrowserWindow, preloadPath: string) {
+  constructor(mainWindow: BrowserWindow, preloadPath: string, newTabUrl: string) {
     this.mainWindow = mainWindow;
     this.preloadPath = preloadPath;
+    this.newTabUrl = newTabUrl;
   }
 
   public getTabs() {
@@ -115,7 +117,8 @@ export class TabManager {
     this.activeTabId = null;
   }
 
-  public createTab(url = 'https://example.com', activate = true, groupId: string | null = null): number {
+  public createTab(url?: string, activate = true, groupId: string | null = null): number {
+    url = url ?? this.newTabUrl;
     const id = this.nextTabId++;
     this.createTabInternal(id, url, 'New Tab', groupId);
     
